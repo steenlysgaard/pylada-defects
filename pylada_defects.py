@@ -1,5 +1,5 @@
 #################################################
-# 
+#
 # anuj.goyal@nrel.gov
 # Date: October 17 2016
 #
@@ -12,7 +12,7 @@ from pylada.crystal.defects import reindex_sites
 from pylada.vasp import Extract, MassExtract
 
 # imports from python
-from pyspglib import spglib
+import spglib
 from glob import iglob
 from itertools import *
 from scipy.spatial import distance
@@ -24,9 +24,46 @@ import sys
 import math
 import tess
 import os
+import types
+import inspect
+
+# Use original spglib by decorating it with a function that converts
+# the pylada structure to a tuple with the information spglib wants
+# Edits by Steen Lysgaard
+
+
+def structure_to_tuple(structure):
+    """Convert pylada Structure to tuple that is accepted by spglib.
+    The tuple should have three or four elements:
+    cell = (lattice, positions, numbers, magmoms),
+    where magmoms are optional.
+    """
+    positions = []
+    magmoms = []
+    numbers = []
+    for atom in structure:
+        positions.append(atom.pos)
+        magmoms.append(atom.magmom)
+        numbers.append(find(name=atom.type).atomic_number)
+    if any(magmoms):
+        return (structure.cell, np.array(positions), numbers, magmoms)
+    else:
+        return (structure.cell, np.array(positions), numbers)
+
+
+def decorate(func):
+    def wrapper(struct, *args):
+        return func(structure_to_tuple(struct), *args)
+    return wrapper
+
+
+for name, fn in inspect.getmembers(spglib):
+    if isinstance(fn, types.FunctionType):
+        setattr(spglib, name, decorate(fn))
+
 
 ##########################################################
-def compute_voronoi(points):                                                        
+def compute_voronoi(points):
     """ Function to return the python container having information of Voronoi cells for            
         for given points in 3D space                                                               
 
@@ -38,23 +75,26 @@ def compute_voronoi(points):
     """
 
     P = np.array(points)
-    
+
     # box limits along x, y, and z axis
     Lx = 50
     Ly = 50
     Lz = 50
 
-    cntr = tess.Container(P, ((-50, -50, -50),(50, 50, 50)), periodic=(False, False, False))
+    cntr = tess.Container(P, ((-50, -50, -50), (50, 50, 50)),
+                          periodic=(False, False, False))
 
     return cntr
 
 ##########################################################
+
+
 def calculate_midpoint(p1, p2):
     """ Calculate the midpoint given coordinates
-    
+
     Parameters                                                                                          
         p1, p2 = numpy array of point coordinates                                                  
-                                                                                                   
+
     Returns                                                                                         
         midpoint = numpy array of midpoint coordinates                                             
     """
@@ -62,6 +102,8 @@ def calculate_midpoint(p1, p2):
     return((p1[0]+p2[0])/2.0, (p1[1]+p2[1])/2.0, (p1[2]+p2[2])/2.0)
 
 ##########################################################
+
+
 def calculate_polygon_centroid(poly_pts):
     """ Function to calculate the centroid of non-self-intersecting polygon
 
@@ -78,6 +120,8 @@ def calculate_polygon_centroid(poly_pts):
     return C
 
 ##########################################################
+
+
 def neighbor_list(list):
     """ Function to form unique neighboring pairs along the polygon perimeter
 
@@ -96,6 +140,8 @@ def neighbor_list(list):
         yield (list[i], list[0])
 
 ##########################################################
+
+
 def get_vertices(site_num, cntr):
     """ Function that returns vertices of the Voronoi associated with given site
 
@@ -116,6 +162,8 @@ def get_vertices(site_num, cntr):
     return V
 
 ##########################################################
+
+
 def get_edgecenter(site_num, cntr):
     """ Function that returns vertices unique edge centers of the Voronoi associated with specific\
  lattice site
@@ -135,22 +183,24 @@ def get_edgecenter(site_num, cntr):
     all_midpoint = []
 
     for face in list_face_vertices_indices:
-        for(x,y) in neighbor_list(face):
+        for(x, y) in neighbor_list(face):
             midpoint = calculate_midpoint(V_vertices[x], V_vertices[y])
             all_midpoint.append(midpoint)
 
-    #using set so to choose only unique edge centers
+    # using set so to choose only unique edge centers
     S = set(all_midpoint)
 
-    #converting set to list
+    # converting set to list
     Ec = list(S)
 
-    #converting list to numpy array
+    # converting list to numpy array
     Ec = np.asarray(Ec)
 
     return Ec
 
 ##########################################################
+
+
 def get_facecentroid(site_num, cntr):
     """Function the returns vertices of face centers of the Voronoi associated with specific latti\
 ce site
@@ -172,7 +222,7 @@ ce site
     for face in list_face_vertices_indices:
         l = []
         for j in face:
-            vv  = V_vertices[j]
+            vv = V_vertices[j]
             l.append(vv)
         l = np.asarray(l)
         pc = calculate_polygon_centroid(l)
@@ -180,12 +230,14 @@ ce site
 
     Fc = list_face_centroid
 
-    # converting list to numpy array                                                               
+    # converting list to numpy array
     Fc = np.asarray(Fc)
 
     return Fc
 
 ##########################################################
+
+
 def get_all_interstitials(prim_structure, positions):
     """ function to return list of all interstitial sites using Voronoi.py
 
@@ -200,46 +252,49 @@ def get_all_interstitials(prim_structure, positions):
     ints_list = []
 
     for site_num in range(len(positions)):
-        site = np.array([positions[site_num][0], positions[site_num][1], positions[site_num][2]])
+        site = np.array(
+            [positions[site_num][0], positions[site_num][1], positions[site_num][2]])
 
         site_ngh = neighbors(prim_structure, 13, site, 0.1)
 
         points = [site]
 
-        ### creating list with site and its neighbors
+        # creating list with site and its neighbors
         for i in range(len(site_ngh)):
-                a = site + site_ngh[i][1]
-                points.append(a)
+            a = site + site_ngh[i][1]
+            points.append(a)
 
-        ### converting list to numpy array
+        # converting list to numpy array
         points = np.asarray(points)
 
-        ### using tess object cntr to compute voronoi
+        # using tess object cntr to compute voronoi
         cntr = compute_voronoi(points)
 
-        ### Voronoi vertices
-        ### the first position in points is the site, therefore '0'
+        # Voronoi vertices
+        # the first position in points is the site, therefore '0'
         v = get_vertices(0, cntr)
 
         for i in range(len(v)):
             ints_list.append(['B', v[i].tolist()])
 
-        ### Voronoi face centers
+        # Voronoi face centers
         f = get_facecentroid(0, cntr)
 
         for j in range(len(f)):
             ints_list.append(['C', f[j].tolist()])
 
-        ### Voronoi edge centers
+        # Voronoi edge centers
         e = get_edgecenter(0, cntr)
 
         for k in range(len(e)):
             ints_list.append(['N', e[k].tolist()])
 
-    ### return list of list ['Atom type', [x,y,z]]
+    # return list of list ['Atom type', [x,y,z]]
     return ints_list
 
 ##########################################################
+
+
 def get_pos_in_prim_cell(prim, a):
     """ Function to to map positions onto the primitive cell
 
@@ -250,23 +305,27 @@ def get_pos_in_prim_cell(prim, a):
     Returns
         a2 = cartesian coordinates, such that fractional coordination = [0,1)
     """
-    
+
     p = deepcopy(prim)
     a1 = np.array(a)
     inv_cell = np.linalg.inv(p.cell)
 
     frac_a1 = np.dot(inv_cell, a1)
     for m in range(len(frac_a1)):
-        if frac_a1[m] < 0.: frac_a1[m] = frac_a1[m] + 1.
-        if frac_a1[m] >= 0.999: frac_a1[m] = frac_a1[m] - 1.
+        if frac_a1[m] < 0.:
+            frac_a1[m] = frac_a1[m] + 1.
+        if frac_a1[m] >= 0.999:
+            frac_a1[m] = frac_a1[m] - 1.
     a2 = np.dot(p.cell, frac_a1)
 
     return a2
 
 ##########################################################
+
+
 def get_ints_in_prim_cell(prim, positions):
     """ Function to to map positions onto the primitive cell
-    
+
     Parameters
         prim = pylada primitive cell
         positions = list of sites (as list ['element',[x,y,z]])
@@ -274,27 +333,31 @@ def get_ints_in_prim_cell(prim, positions):
     Returns
         int_pos_list1 = unique list of sites (as numpy array) within primitive cell
     """
-    
+
     prim1 = deepcopy(prim)
     ints1 = deepcopy(positions)
     inverse_cell1 = np.linalg.inv(prim1.cell)
     int_pos_list1 = []
-    
+
     for i in range(len(ints1)):
         a1 = np.array(ints1[i][1])
         frac_a1 = np.dot(inverse_cell1, a1)
         for m1 in range(len(frac_a1)):
-            if frac_a1[m1] < 0.: frac_a1[m1] = frac_a1[m1]+1.
-            if frac_a1[m1] >= 0.999: frac_a1[m1] = frac_a1[m1]-1.
+            if frac_a1[m1] < 0.:
+                frac_a1[m1] = frac_a1[m1]+1.
+            if frac_a1[m1] >= 0.999:
+                frac_a1[m1] = frac_a1[m1]-1.
         a2 = np.dot(prim1.cell, frac_a1)
         int_pos_list1.append(a2)
-    
+
     return int_pos_list1
 
 ##########################################################
+
+
 def get_unique_wyckoff(prim):
     """ Function to find unique wyckoff sites in the primitive cell
-    
+
     Parameters
         prim = pylada primitive cell
 
@@ -303,7 +366,7 @@ def get_unique_wyckoff(prim):
     """
     p = deepcopy(prim)
 
-    #Anuj_04/07/17: To make sure unique wyckoff is done on primitive
+    # Anuj_04/07/17: To make sure unique wyckoff is done on primitive
 #    p = primitive(pp)
 
     # compute space group for the given primitive cell using spglib
@@ -311,7 +374,7 @@ def get_unique_wyckoff(prim):
 
     # compute inverce cell of the primitive cell
     inverse_cell = np.linalg.inv(p.cell)
-    
+
     dummy_list = []
     wyckoff_list = []
 
@@ -335,21 +398,23 @@ def get_unique_wyckoff(prim):
             b = p[k].pos
             b2 = get_pos_in_prim_cell(p, b)
             # check distance between positions in pos and symm_list
-            if any(distance.euclidean(b2,c) < 0.1 for c in symm_list):
+            if any(distance.euclidean(b2, c) < 0.1 for c in symm_list):
                 p[k].pos = p[i].pos
         dummy_list = a.tolist()
         dummy_list.append(p[i].type)
         wyckoff_list.append(dummy_list)
-    
-    ### getting unique array of positions
+
+    # getting unique array of positions
     unique_list = [list(t) for t in set(map(tuple, wyckoff_list))]
-    
+
     return unique_list
 
 ##########################################################
+
+
 def get_unique_ints(prim, int_pos, ttol=0.5):
     """ Function to find unique interstitial sites in the primitive cell
-    
+
     Parameters
         prim = pylada primitive cell
         int_pos = list of interstitial positions in primitive cell
@@ -366,7 +431,7 @@ def get_unique_ints(prim, int_pos, ttol=0.5):
     int_list2 = []
 
     for i in range(len(pos2)):
-    #   numpy 1D array into column vector with shape listed as (3,)
+        #   numpy 1D array into column vector with shape listed as (3,)
         a4 = pos2[i]
         frac_a4 = np.dot(inverse_cell2, a4)
         symm_list2 = []
@@ -378,23 +443,25 @@ def get_unique_ints(prim, int_pos, ttol=0.5):
             symm_list2.append(symm_a4)
             symm_a5 = get_pos_in_prim_cell(prim2, symm_a4)
             symm_list2.append(symm_a5)
-        # loop to find symmetrical equivalent positions    
+        # loop to find symmetrical equivalent positions
         for k in range(i+1, len(pos2)):
             b2 = pos2[k]
             # check distance between positions in pos and symm_list
-            if any(distance.euclidean(b2,c2) < ttol for c2 in symm_list2):
+            if any(distance.euclidean(b2, c2) < ttol for c2 in symm_list2):
                 pos2[k] = pos2[i]
         int_list2.append(pos2[i])
 
-    ### getting the unique list of interstitials
+    # getting the unique list of interstitials
     unique_int_list = [list(t) for t in set(map(tuple, int_list2))]
-    
+
     return unique_int_list
 
 ##########################################################
+
+
 def get_interstitials(structure, ttol=0.5):
     """ Function to return unique interstitial sites in the given structure
-    
+
     Parameters
         structure = poscar file (using read.poscar)
         ttol = tolerance
@@ -407,21 +474,23 @@ def get_interstitials(structure, ttol=0.5):
     prim = primitive(s)
     spg = spglib.get_spacegroup(prim, 0.1)
 
-    ### Step 1: get unique sites in the primitive of the given structure
+    # Step 1: get unique sites in the primitive of the given structure
     uniq_sites = get_unique_wyckoff(prim)
 
-    ### Step 2: get all interstitial sites from Voronoi method
+    # Step 2: get all interstitial sites from Voronoi method
     ints2 = get_all_interstitials(prim, uniq_sites)
 
-    ### get interstital sites within primitive cell
+    # get interstital sites within primitive cell
     ints_prim = get_ints_in_prim_cell(prim, ints2)
 
-    ### Step 3: get unique interstitials after symmetry analysis
+    # Step 3: get unique interstitials after symmetry analysis
     ints3 = get_unique_ints(prim, ints_prim, ttol=ttol)
-        
+
     return ints3
 
 ##########################################################
+
+
 def get_atom_indices(atomtype, structure):
     """ function to return all indices corresponding to unique Wyckoff positions for given atomtype
 
@@ -437,26 +506,29 @@ def get_atom_indices(atomtype, structure):
     atom_indices = []
     unq_wyck = get_unique_wyckoff(structure)
     for i in range(len(unq_wyck)):
-        if unq_wyck[i][3]==atomtype:
-#            a = np.array([unq_wyck[i][0], unq_wyck[i][1], unq_wyck[i][2]])
-            a = np.around(np.array([unq_wyck[i][0], unq_wyck[i][1], unq_wyck[i][2]]), decimals=4)
+        if unq_wyck[i][3] == atomtype:
+            #            a = np.array([unq_wyck[i][0], unq_wyck[i][1], unq_wyck[i][2]])
+            a = np.around(
+                np.array([unq_wyck[i][0], unq_wyck[i][1], unq_wyck[i][2]]), decimals=4)
             for j in range(len(structure)):
                 b = np.around(structure[j].pos, decimals=4)
-                if all (np.isclose(a, b)):
+                if all(np.isclose(a, b)):
                     atom_indices.append(j)
 
     return atom_indices
 
 ##########################################################
+
+
 def get_duplicates(massextr, te_diff=0.01):
     """ function to identify unique intersitials
-    
+
     Parameters
         massextr = Pylada mass extraction object (directory with all intersitials directories)
         te_diff = difference in total energy among interstitials, default = 0.01 eV
     Returns
         dict = {key='foldername', total_energy, index}
-    
+
     Note"
     index = all the foldername (intersitials) with same index are effectively considered equivalent
     Criteria for duplicates
@@ -473,7 +545,7 @@ def get_duplicates(massextr, te_diff=0.01):
 
     for k in dict_E.keys():
         g = g+1
-        dict2[k]=[dict_E[k]]
+        dict2[k] = [dict_E[k]]
         dict2[k].append(g)
 
     folder_list = [l for l in massextr]
@@ -485,8 +557,10 @@ def get_duplicates(massextr, te_diff=0.01):
         str2 = dict_Str[i[1]]
         spg1 = spglib.get_spacegroup(str1)
         spg2 = spglib.get_spacegroup(str2)
-        ngh_list_1 = sorted([len(neighbors(str1, 1, atom.pos, 0.2)) for atom in str1])
-        ngh_list_2 = sorted([len(neighbors(str2, 1, atom.pos, 0.2)) for atom in str2])
+        ngh_list_1 = sorted(
+            [len(neighbors(str1, 1, atom.pos, 0.2)) for atom in str1])
+        ngh_list_2 = sorted(
+            [len(neighbors(str2, 1, atom.pos, 0.2)) for atom in str2])
         if diff_E <= te_diff:
             if spg1 == spg2:
                 if ngh_list_1 == ngh_list_2:
@@ -495,9 +569,11 @@ def get_duplicates(massextr, te_diff=0.01):
     return(dict2)
 
 ##############################################################
+
+
 def ffirst_shell(structure, pos, tolerance):
     """ Function to iterate through the first neighbor shell
-    
+
     Parameters
         structure = pylada structure object
         pos = position (numpy array) of site, around which neighbor shell need to be computed
@@ -506,17 +582,19 @@ def ffirst_shell(structure, pos, tolerance):
     Returns
         list of neighbors, same format as pylada.crystal.neigbors
     """
-    
+
     struct = deepcopy(structure)
 
     for i, a in enumerate(struct):
-        a.index=i
-        neighs = [n  for n in neighbors(struct, 12, pos)]
+        a.index = i
+        neighs = [n for n in neighbors(struct, 12, pos)]
         d = neighs[0][2]
-    
+
     return [n for n in neighs if abs(n[2] - d) < tolerance*d]
 
 ##############################################################
+
+
 def explore_defect(defect, host, tol):
     """ Function to find the position, atom-type etc. of the defect species
 
@@ -539,35 +617,38 @@ def explore_defect(defect, host, tol):
         Note:
         1. Adopted from Haowei Peng version in pylada.defects
     """
-    
-    result = {'interstitial':[], 'substitution':[], 'vacancy': []}
-    
-    ###look for vacancies
+
+    result = {'interstitial': [], 'substitution': [], 'vacancy': []}
+
+    # look for vacancies
     hstr = deepcopy(host)
     dstr = deepcopy(defect)
     reindex_sites(hstr, dstr, tol)
-    
+
     for atom in hstr:
-        if atom.site!=-1: continue
+        if atom.site != -1:
+            continue
         result['vacancy'].append(deepcopy(atom))
-        
-    ###look for intersitials and substitutionals
+
+    # look for intersitials and substitutionals
     hstr = deepcopy(host)
     dstr = deepcopy(defect)
     reindex_sites(dstr, hstr, tol)
-    
+
     dstr_copy = deepcopy(dstr)
     for i, atom in enumerate(dstr_copy):
         atom.index = i
-        ## Is intersitial always last? No, but reindex_sites, always labels interstitial as site=-1
-        if atom.site== -1:
+        # Is intersitial always last? No, but reindex_sites, always labels interstitial as site=-1
+        if atom.site == -1:
             result['interstitial'].append(deepcopy(atom))
         elif atom.type != hstr[atom.site].type:
             result['substitution'].append(deepcopy(atom))
-            
+
     return result
 
 ##############################################################
+
+
 def avg_electropot(host):
     """ function to compute average electrostatic potential of bulk or defect (DFT calculation)
 
@@ -583,7 +664,7 @@ def avg_electropot(host):
     atmtype = hstr[0].type
     c1 = 0
     dummy_list = []
-    
+
     for n in range(len(hstr)):
         if hstr[n].type == atmtype:
             c1 = c1+1
@@ -600,16 +681,18 @@ def avg_electropot(host):
     for i in range(len(dummy_list)):
         avg = np.mean(host.electropot[dummy:dummy+dummy_list[i][1]])
         key = dummy_list[i][0]
-        dict_host_e[key]=avg
+        dict_host_e[key] = avg
         dummy = dummy + dummy_list[i][1]
 
     return dict_host_e
 
 ##############################################################
+
+
 def avg_potential_alignment(defect, host, e_tol=0.2):
     """ function to compute potential alignment correction using average host electrostatic potential
         Reference: S. Lany and A. Zunger, Phys. Rev. B 78, 235104 (2008)
-    
+
     Parameters
         defect = pylada.vasp.Extract object
         host = pylada.vasp.Extract object
@@ -629,26 +712,28 @@ def avg_potential_alignment(defect, host, e_tol=0.2):
     # list of indicies in defect structure, that are accpetable in pot_align corr
     acceptable = [True for a in d_str]
 
-    #dictionary with average host electrostatic potential with atom type
+    # dictionary with average host electrostatic potential with atom type
     dict_hoste = avg_electropot(host)
 
-    #dictionary with average defect electrostatic potential with atom type
+    # dictionary with average defect electrostatic potential with atom type
     dict_defecte = avg_electropot(defect)
 
     # compute the difference between defect electrostatic potential and avg. defect pot for each atom
     # Needed to determine unacceptable atoms based on e_tol
-    diff_dh = [abs(e - dict_defecte[a.type]).rescale(eV) for e, a in zip(defect.electropot, d_str)]
+    diff_dh = [abs(e - dict_defecte[a.type]).rescale(eV)
+               for e, a in zip(defect.electropot, d_str)]
 
     # find max value of difference in electrostatic potential of defect and host
     maxdiff = max(diff_dh).magnitude
 
     # make atoms unacceptable with diff_dh larger than maxdiff or the user energy tolerance(e_tol)
     for ii in range(len(acceptable)):
-        if float(diff_dh[ii].magnitude)>= maxdiff or float(diff_dh[ii].magnitude)>=e_tol:
+        if float(diff_dh[ii].magnitude) >= maxdiff or float(diff_dh[ii].magnitude) >= e_tol:
             acceptable[ii] = False
 
     # check for impurity
-    impurity = [k for k in dict_defecte.keys() if k not in set(dict_hoste.keys())]
+    impurity = [k for k in dict_defecte.keys(
+    ) if k not in set(dict_hoste.keys())]
 
     for jj in range(len(acceptable)):
         if d_str[jj].type in impurity:
@@ -660,25 +745,28 @@ def avg_potential_alignment(defect, host, e_tol=0.2):
     for jj in range(len(acceptable)):
         if acceptable[jj] == False:
             nex = nex + 1
-    
+
     # Avoid excluding all atoms
     if not any(acceptable):
         # if user give e_tol < 0.0001
         print("ERROR; e_tol is too small excluding all atoms !! Increase e_tol")
     else:
         # compute the difference in electrostatic of defect and host only for acceptable atoms
-        diff_dh2 = [(e - dict_hoste[a.type]).rescale(eV) for e, a, ok in zip(defect.electropot, d_str, acceptable) if ok]
-        
+        diff_dh2 = [(e - dict_hoste[a.type]).rescale(eV)
+                    for e, a, ok in zip(defect.electropot, d_str, acceptable) if ok]
+
         # compute alignment_correction
         align_corr = np.mean(diff_dh2)
 
     return ["{:0.3f}".format(float(e_tol)), nex, "{:0.4f}".format(float(align_corr)), 'eV']
 
 ##############################################################
+
+
 def potential_alignment(defect, host, ngh_shell=False, str_tol=0.4, e_tol=0.2):
     """ function to compute potential alignment correction
         Reference: S. Lany and A. Zunger, Phys. Rev. B 78, 235104 (2008)
-        
+
     Parameters
         defect = pylada.vasp.Extract object
         host = pylada.vasp.Extract object
@@ -689,7 +777,7 @@ def potential_alignment(defect, host, ngh_shell=False, str_tol=0.4, e_tol=0.2):
     Returns
         list = str_tol, e_tol, #_atoms_excluded, potal_align_corr *eV
         format = [str_tol, e_tol, nex, pot_align]
-        
+
       Returns average difference of the electrostatic potential of the
       unperturbed atoms in the defect structure with respect to the host.
       *Perturbed* atoms are those flagged as defect by `explore_defect`, their
@@ -700,10 +788,10 @@ def potential_alignment(defect, host, ngh_shell=False, str_tol=0.4, e_tol=0.2):
     """
     # get defect structure from pylada Extract object
     d_str = defect.structure
-    
+
     # get host structure from pylada Extract object
     h_str = host.structure
-    
+
     # find defect type, its coordinates, atom-type
     defects = explore_defect(d_str, h_str, str_tol)
 
@@ -712,10 +800,10 @@ def potential_alignment(defect, host, ngh_shell=False, str_tol=0.4, e_tol=0.2):
     # CAUTION - may cause problem if defect structure is very highly distorted
     # Works well for split and reasonably (?) distorted structures
     reindex_sites(d_str, h_str, str_tol)
-    
+
     # list of indicies in defect structure, that are accpetable in pot_align corr
     acceptable = [True for a in d_str]
-    
+
     # make intersitial and substitutional unacceptable
     for keys in defects:
         if keys != 'vacancy':
@@ -728,32 +816,33 @@ def potential_alignment(defect, host, ngh_shell=False, str_tol=0.4, e_tol=0.2):
         print("ERROR; Cannot compare defect and host !! Switch to avg_potential_alignment")
         sys.exit()
 
-    # make neighbors (upto=tol=0.2) to defects unacceptable 
+    # make neighbors (upto=tol=0.2) to defects unacceptable
     if ngh_shell:
         for keys in defects:
             for atom in defects[keys]:
                 for n in ffirst_shell(d_str, atom.pos, 0.1):
                     acceptable[n[0].index] = False
-                    
+
     # copy of acceptable before trusting user inputs
     raw_acceptable = deepcopy(acceptable)
-    
+
     # dictionary with average defect elec. pot
     dict_defecte = avg_electropot(defect)
 
     # list to store abs. differnce in the electrostatic potential of defect and host
-    diff_dh = [ (0.0*eV if not ok else abs(e - dict_defecte[a.type]).rescale(eV))
-           for e, a, ok in zip(defect.electropot, d_str, acceptable)]
-    
+    diff_dh = [(0.0*eV if not ok else abs(e - dict_defecte[a.type]).rescale(eV))
+               for e, a, ok in zip(defect.electropot, d_str, acceptable)]
+
     # find max value of difference in electrostatic potential of defect and host
     maxdiff = max(diff_dh).magnitude
 
     # make atoms with diff_dh larger than user energy tolerance(e_tol) unacceptable
     for ii in range(len(acceptable)):
-        if acceptable[ii] == False: pass
-        elif float(diff_dh[ii].magnitude)>= maxdiff or float(diff_dh[ii].magnitude)>=e_tol:
+        if acceptable[ii] == False:
+            pass
+        elif float(diff_dh[ii].magnitude) >= maxdiff or float(diff_dh[ii].magnitude) >= e_tol:
             acceptable[ii] = False
-    
+
     # Avoid excluding all atoms
     if not any(acceptable):
         # if user give e_tol < 0.0001
@@ -769,21 +858,23 @@ def potential_alignment(defect, host, ngh_shell=False, str_tol=0.4, e_tol=0.2):
 
     # count for unacceptable number of atoms in defect structure
     nex = 0
-    
+
     for jj in range(len(acceptable)):
         if acceptable[jj] == False:
             nex = nex + 1
-        
+
     # compute the difference in electrostatic of defect and host only for acceptable atoms
     diff_dh2 = [(e - host.electropot[a.site]).rescale(eV)
-           for e, a, ok in zip(defect.electropot, d_str, acceptable) if ok]
-    
+                for e, a, ok in zip(defect.electropot, d_str, acceptable) if ok]
+
     # compute alignment_correction
     align_corr = np.mean(diff_dh2)
-    
-    return ["{:0.3f}".format(float(str_tol)), "{:0.3f}".format(float(e_tol)), nex, "{:0.4f}".format(float(align_corr)), 'eV']   
+
+    return ["{:0.3f}".format(float(str_tol)), "{:0.3f}".format(float(e_tol)), nex, "{:0.4f}".format(float(align_corr)), 'eV']
 
 ##############################################################
+
+
 def get_potential_alignment(defect, host, etol=0.15, etol_range=0.075, steps=10):
     """ Function to compute potential alignment correction for range of e_tol values
         Reference: S. Lany and A. Zunger, Phys. Rev. B 78, 235104 (2008)
@@ -806,6 +897,8 @@ def get_potential_alignment(defect, host, etol=0.15, etol_range=0.075, steps=10)
         print(potal)
 
 ##############################################################
+
+
 def get_avg_potential_alignment(defect, host, etol=0.15, etol_range=0.075, steps=10):
     """ Function to compute potential alignment correcton using avg. host electrostatic potential, for range of e_tol values
         Reference: S. Lany and A. Zunger, Phys. Rev. B 78, 235104 (2008)
@@ -828,6 +921,8 @@ def get_avg_potential_alignment(defect, host, etol=0.15, etol_range=0.075, steps
         print(potal)
 
 ##############################################################
+
+
 def get_band_filling(defect, host, potal):
     """ Function to compute band filling correction
     Reference: T.S. Moss, Proc. Phys. Soc. London, Sect. B 67, 75 (1954); E. Burstein, Phys. Rev. 93, 632 (1954)
@@ -839,93 +934,117 @@ def get_band_filling(defect, host, potal):
 
     Returns
         prints: band-filling correction to the total energy (eV), and band-filling 
-    
+
     Note:
     1.Accounts for the Moss-Burnstein band-filling effect in case of shallow donors and acceptors
     2.Modified the old(or original) Haowei Pengs' version of function(band_filling) in pylada.defects module    
     """
-    
+
     eig = host.eigenvalues
     fermi = host.fermi_energy
-    
+
     cbm = min([x for x in eig.flatten() if x > fermi]) + potal*eV
 ##    cbm = host.cbm + potal*eV
 
-    #compute band filling correction to energy (for eigenvalues > cbm)                               
+    # compute band filling correction to energy (for eigenvalues > cbm)
     if defect.eigenvalues.ndim == 3:
-        dummy = np.multiply(defect.eigenvalues-cbm, defect.multiplicity[np.newaxis,:,np.newaxis])
+        dummy = np.multiply(defect.eigenvalues-cbm,
+                            defect.multiplicity[np.newaxis, :, np.newaxis])
         dummy = np.multiply(dummy, defect.occupations)
     elif defect.eigenvalues.ndim == 2:
-        dummy = np.multiply(defect.eigenvalues-cbm, defect.multiplicity[:,np.newaxis])
+        dummy = np.multiply(defect.eigenvalues-cbm,
+                            defect.multiplicity[:, np.newaxis])
         dummy = np.multiply(dummy, defect.occupations)
 
-    result_n = -np.sum(dummy[defect.eigenvalues > cbm])/ np.sum(defect.multiplicity)
+    result_n = -np.sum(dummy[defect.eigenvalues > cbm]
+                       ) / np.sum(defect.multiplicity)
 
-    #compute occupation corresponding to band filling (> cbm)                                        
+    # compute occupation corresponding to band filling (> cbm)
     if defect.eigenvalues.ndim == 3:
-        dummy2_up = np.multiply(defect.occupations[0], defect.multiplicity[:,np.newaxis])
-        dummy2_down = np.multiply(defect.occupations[1], defect.multiplicity[:,np.newaxis])
+        dummy2_up = np.multiply(
+            defect.occupations[0], defect.multiplicity[:, np.newaxis])
+        dummy2_down = np.multiply(
+            defect.occupations[1], defect.multiplicity[:, np.newaxis])
     elif defect.eigenvalues.ndim == 2:
-        dummy2 = np.multiply(defect.occupations, defect.multiplicity[:,np.newaxis])
+        dummy2 = np.multiply(defect.occupations,
+                             defect.multiplicity[:, np.newaxis])
 
-    #compute band filling (> cbm)                                                                    
+    # compute band filling (> cbm)
     if defect.eigenvalues.ndim == 3:
-        occ_n_up = np.sum(dummy2_up[defect.eigenvalues[0] > cbm]) / np.sum(defect.multiplicity)
-        occ_n_down = np.sum(dummy2_down[defect.eigenvalues[1] > cbm]) / np.sum(defect.multiplicity)
+        occ_n_up = np.sum(
+            dummy2_up[defect.eigenvalues[0] > cbm]) / np.sum(defect.multiplicity)
+        occ_n_down = np.sum(
+            dummy2_down[defect.eigenvalues[1] > cbm]) / np.sum(defect.multiplicity)
     elif defect.eigenvalues.ndim == 2:
-        occ_n = np.sum(dummy2[defect.eigenvalues > cbm]) / np.sum(defect.multiplicity)
+        occ_n = np.sum(dummy2[defect.eigenvalues > cbm]
+                       ) / np.sum(defect.multiplicity)
 
     vbm = max([x for x in eig.flatten() if x <= fermi]) + potal*eV
 ##    vbm = host.vbm + potal*eV
 
-    #Anuj_03/08/17: Made changes to BF incorporate spin-orbit calculations
-    #compute band filling correction to energy (for eigenvalues < vbm)                               
+    # Anuj_03/08/17: Made changes to BF incorporate spin-orbit calculations
+    # compute band filling correction to energy (for eigenvalues < vbm)
     if defect.lsorbit == True:
         if host.lsorbit == False:
             print("Error: Use host with SOC")
             sys.exit()
         assert host.lsorbit == True
         assert defect.eigenvalues.ndim == 2
-        dummy = np.multiply(vbm - defect.eigenvalues, defect.multiplicity[:,np.newaxis])
+        dummy = np.multiply(vbm - defect.eigenvalues,
+                            defect.multiplicity[:, np.newaxis])
         dummy = np.multiply(dummy, 1e0 - defect.occupations)
     elif defect.lsorbit == False:
         if defect.eigenvalues.ndim == 3:
-            dummy = np.multiply(vbm - defect.eigenvalues, defect.multiplicity[np.newaxis,:,np.newaxis])
+            dummy = np.multiply(vbm - defect.eigenvalues,
+                                defect.multiplicity[np.newaxis, :, np.newaxis])
             dummy = np.multiply(dummy, 1e0 - defect.occupations)
         elif defect.eigenvalues.ndim == 2:
-            dummy = np.multiply(vbm - defect.eigenvalues, defect.multiplicity[:,np.newaxis])
+            dummy = np.multiply(vbm - defect.eigenvalues,
+                                defect.multiplicity[:, np.newaxis])
             dummy = np.multiply(dummy, 2e0 - defect.occupations)
 
-    result_p = -np.sum(dummy[defect.eigenvalues < vbm])/ np.sum(defect.multiplicity)
+    result_p = -np.sum(dummy[defect.eigenvalues < vbm]
+                       ) / np.sum(defect.multiplicity)
 
-    #compute occupation corresponding to band filling (< vbm)                                        
+    # compute occupation corresponding to band filling (< vbm)
     if defect.lsorbit == True:
         if host.lsorbit == False:
             print("Error: Use host with SOC")
             sys.exit()
         assert host.lsorbit == True
         assert defect.eigenvalues.ndim == 2
-        dummy2 = np.multiply(1e0-defect.occupations, defect.multiplicity[:,np.newaxis])
+        dummy2 = np.multiply(1e0-defect.occupations,
+                             defect.multiplicity[:, np.newaxis])
     elif defect.lsorbit == False:
         if defect.eigenvalues.ndim == 3:
-            dummy2_up = np.multiply(1e0-defect.occupations[0], defect.multiplicity[:,np.newaxis])
-            dummy2_down = np.multiply(1e0-defect.occupations[1], defect.multiplicity[:,np.newaxis])
+            dummy2_up = np.multiply(
+                1e0-defect.occupations[0], defect.multiplicity[:, np.newaxis])
+            dummy2_down = np.multiply(
+                1e0-defect.occupations[1], defect.multiplicity[:, np.newaxis])
         elif defect.eigenvalues.ndim == 2:
-            dummy2 = np.multiply(2e0-defect.occupations, defect.multiplicity[:,np.newaxis])
+            dummy2 = np.multiply(2e0-defect.occupations,
+                                 defect.multiplicity[:, np.newaxis])
 
-    #compute band filling (< vbm)
+    # compute band filling (< vbm)
     if defect.eigenvalues.ndim == 3:
-        occ_p_up = np.sum(dummy2_up[defect.eigenvalues[0] < vbm]) / np.sum(defect.multiplicity)
-        occ_p_down = np.sum(dummy2_down[defect.eigenvalues[1] < vbm]) / np.sum(defect.multiplicity)
+        occ_p_up = np.sum(
+            dummy2_up[defect.eigenvalues[0] < vbm]) / np.sum(defect.multiplicity)
+        occ_p_down = np.sum(
+            dummy2_down[defect.eigenvalues[1] < vbm]) / np.sum(defect.multiplicity)
     elif defect.eigenvalues.ndim == 2:
-        occ_p = np.sum(dummy2[defect.eigenvalues < vbm]) / np.sum(defect.multiplicity)
-        
+        occ_p = np.sum(dummy2[defect.eigenvalues < vbm]
+                       ) / np.sum(defect.multiplicity)
+
     if defect.eigenvalues.ndim == 3:
-        print("CBM: bf_corr(eV)", "{:0.4f}".format(float(result_n.rescale(eV).magnitude)), 'bf (up, down)', "{:0.4f}".format(float(occ_n_up)), "{:0.4f}".format(float(occ_n_down)))
-        print("VBM: bf_corr(eV)", "{:0.4f}".format(float(result_p.rescale(eV).magnitude)), 'bf (up, down)', "{:0.4f}".format(float(occ_p_up)), "{:0.4f}".format(float(occ_p_down)))
+        print("CBM: bf_corr(eV)", "{:0.4f}".format(float(result_n.rescale(
+            eV).magnitude)), 'bf (up, down)', "{:0.4f}".format(float(occ_n_up)), "{:0.4f}".format(float(occ_n_down)))
+        print("VBM: bf_corr(eV)", "{:0.4f}".format(float(result_p.rescale(
+            eV).magnitude)), 'bf (up, down)', "{:0.4f}".format(float(occ_p_up)), "{:0.4f}".format(float(occ_p_down)))
     elif defect.eigenvalues.ndim == 2:
-        print('CBM: bf_corr(eV)', "{:0.4f}".format(float(result_n.rescale(eV).magnitude)), 'bf', "{:0.4f}".format(float(occ_n)))
-        print('VBM: bf_corr(eV)', "{:0.4f}".format(float(result_p.rescale(eV).magnitude)), 'bf', "{:0.4f}".format(float(occ_p)))
+        print('CBM: bf_corr(eV)', "{:0.4f}".format(
+            float(result_n.rescale(eV).magnitude)), 'bf', "{:0.4f}".format(float(occ_n)))
+        print('VBM: bf_corr(eV)', "{:0.4f}".format(
+            float(result_p.rescale(eV).magnitude)), 'bf', "{:0.4f}".format(float(occ_p)))
 
 
 ##############################################################
@@ -954,30 +1073,35 @@ def get_madelungenergy(defect, charge=None, epsilon=1e0, cutoff=100.0):
     from pylada.physics import Ry
     from pylada.ewald import ewald
 
-    if charge is None: charge = 1
-    elif charge == 0: return 0e0 *eV
-    if hasattr(charge, "units"): charge = float(charge.rescale(elementary_charge))
+    if charge is None:
+        charge = 1
+    elif charge == 0:
+        return 0e0 * eV
+    if hasattr(charge, "units"):
+        charge = float(charge.rescale(elementary_charge))
 
     ewald_cutoff = cutoff * Ry
-    
+
     structure = defect.structure
 
     struc = Structure()
     struc.cell = structure.cell
     struc.scale = structure.scale
     struc.add_atom(0., 0., 0., "P", charge=charge)
-    
-    #Anuj_05/22/18: added "cutoff" in ewald syntax
+
+    # Anuj_05/22/18: added "cutoff" in ewald syntax
     result = ewald(struc, cutoff=ewald_cutoff).energy / epsilon
     return -1*result.rescale(eV)
 
 ##############################################################
+
+
 def get_3rdO_corr(defect, charge=None, n=100, epsilon=1e0):
     """ Function returns scaled 3rd order image charge correction
     Reference: S. Lany and A. Zunger, Phys. Rev. B 78, 235104 (2008)
                S. Lany and A. Zunger, Model. Simul. Mater. Sci. Eng. 17, 0842002 (2009)
                [Eq. 6, 7 and 11]
-                                                                                                                         
+
     Parameters
         defect = pylada.vasp.Extract object
         charge = charge of point defect. Default 1e0 elementary charge
@@ -993,26 +1117,32 @@ def get_3rdO_corr(defect, charge=None, n=100, epsilon=1e0):
     from quantities import elementary_charge, eV, pi, angstrom
     from pylada.physics import a0, Ry
 
-    ## Pgraf's port of the old c-version. (Haowei comments could be faster)
-    ## Anuj_05/22/18: Modified to "third_order" in pylada.crystal.defects 
+    # Pgraf's port of the old c-version. (Haowei comments could be faster)
+    # Anuj_05/22/18: Modified to "third_order" in pylada.crystal.defects
     from pylada.crystal.defects import third_order
 
-    if charge is None: charge = 1e0
-    elif charge == 0: return 0e0 *eV
-    if hasattr(charge, "units"): charge = float(charge.rescale(elementary_charge))
-    if hasattr(epsilon, "units"): epsilon = float(epsilon.simplified)
+    if charge is None:
+        charge = 1e0
+    elif charge == 0:
+        return 0e0 * eV
+    if hasattr(charge, "units"):
+        charge = float(charge.rescale(elementary_charge))
+    if hasattr(epsilon, "units"):
+        epsilon = float(epsilon.simplified)
 
     structure = defect.structure
 
     cell = (structure.cell*structure.scale).rescale(a0)
 
-#Anuj_05/22/18: modified to "third_order"
-    scaled_3rdO = third_order(cell, n) * (4e0*pi/3e0)* Ry.rescale(eV) * charge * charge \
-        *(1e0- 1e0/epsilon) / epsilon
+# Anuj_05/22/18: modified to "third_order"
+    scaled_3rdO = third_order(cell, n) * (4e0*pi/3e0) * Ry.rescale(eV) * charge * charge \
+        * (1e0 - 1e0/epsilon) / epsilon
 
     return scaled_3rdO
 
 ##############################################################
+
+
 def thirdO(defect, charge=None, n=100):
     """ Function returns 3rd order image charge correction, same as LZ fortran script
     Reference: S. Lany and A. Zunger, Phys. Rev. B 78, 235104 (2008)
@@ -1031,24 +1161,30 @@ def thirdO(defect, charge=None, n=100):
     from quantities import elementary_charge, eV, pi, angstrom
     from pylada.physics import a0, Ry
 
-    ## Pgraf's port of the old c-version. Could be faster
-    ## Anuj_05/22/18: modified to "third_order" in pylada.crystal.defects
+    # Pgraf's port of the old c-version. Could be faster
+    # Anuj_05/22/18: modified to "third_order" in pylada.crystal.defects
     from pylada.crystal.defects import third_order
 
-    if charge is None: charge = 1e0
-    elif charge == 0: return 0e0 *eV
-    if hasattr(charge, "units"): charge = float(charge.rescale(elementary_charge))
+    if charge is None:
+        charge = 1e0
+    elif charge == 0:
+        return 0e0 * eV
+    if hasattr(charge, "units"):
+        charge = float(charge.rescale(elementary_charge))
 
     structure = defect.structure
 
     cell = (structure.cell*structure.scale).rescale(a0)
 
-    #Anuj_05/22/18:modified to "third_order"
-    thirdO = third_order(cell, n) * (4e0*pi/3e0) * Ry.rescale(eV) * charge * charge
+    # Anuj_05/22/18:modified to "third_order"
+    thirdO = third_order(cell, n) * (4e0*pi/3e0) * \
+        Ry.rescale(eV) * charge * charge
 
     return thirdO
 
 ##############################################################
+
+
 def charge_corr(defect, charge=None, epsilon=1e0, cutoff=100., n=100, **kwargs):
     """ Function returns complete image charge correction (Madelung + scaled 3rd Order)
         Reference: S. Lany and A. Zunger, Model. Simul. Mater. Sci. Eng. 17, 0842002 (2009)[Eq. 11]
@@ -1066,10 +1202,13 @@ def charge_corr(defect, charge=None, epsilon=1e0, cutoff=100., n=100, **kwargs):
     Note: Adopted from Haowei Peng's version(charge_correction) in pylada.defects                                                           
     """
 
-    if charge is None: charge = 1e0
-    elif charge == 0: return 0e0 *eV
+    if charge is None:
+        charge = 1e0
+    elif charge == 0:
+        return 0e0 * eV
 
-    E1 = get_madelungenergy(defect, charge=charge, epsilon=epsilon, cutoff=cutoff)
+    E1 = get_madelungenergy(defect, charge=charge,
+                            epsilon=epsilon, cutoff=cutoff)
     E3 = get_3rdO_corr(defect, charge=charge, n=n, epsilon=epsilon)
 
     result_cc = E1 - E3
@@ -1077,6 +1216,8 @@ def charge_corr(defect, charge=None, epsilon=1e0, cutoff=100., n=100, **kwargs):
     return result_cc
 
 ##############################################################
+
+
 def get_imagecharge(defect, charge=None, epsilon=1e0, cutoff=100., n=100, verbose=False, **kwargs):
     """ Function returns complete image charge correction (Madelung + scaled 3rd Order)
         Reference: S. Lany and A. Zunger, Model. Simul. Mater. Sci. Eng. 17, 0842002 (2009)[Eq. 11]
@@ -1094,30 +1235,33 @@ def get_imagecharge(defect, charge=None, epsilon=1e0, cutoff=100., n=100, verbos
         Verbose = Madelung_energy, 3rd Order, shape-factor csh, scaling f, final_image_correction in eV
     """
 
-    if charge is None: charge = 1e0
-    elif charge == 0: return 0e0 *eV
+    if charge is None:
+        charge = 1e0
+    elif charge == 0:
+        return 0e0 * eV
 
     E1 = get_madelungenergy(defect, charge=1e0, epsilon=1e0, cutoff=cutoff)
     E3 = -1.*thirdO(defect, charge=1e0, n=n)
 
     if epsilon == 1e0:
-        # epsilon==1e0, meaning vacuum                                                                                 
+        # epsilon==1e0, meaning vacuum
         print("epsilon=1e0, defect in vacuum. really!!")
         return E1/epsilon
     else:
         scaled_E3 = E3*(1e0 - 1e0/epsilon)
         csh = E3/E1
         f = csh*(1e0 - 1e0/epsilon)
-        
-        E_ic = (E1 + scaled_E3) * charge * charge /epsilon
-        
+
+        E_ic = (E1 + scaled_E3) * charge * charge / epsilon
+
         if verbose == False:
             return E_ic
         else:
-            return ["{:0.3f}".format(float(E1)), "{:0.3f}".format(float(E3)), "{:0.3f}".format(float(csh)) \
-                        ,"{:0.3f}".format(float(f)), "{:0.3f}".format(float(E_ic))]
+            return ["{:0.3f}".format(float(E1)), "{:0.3f}".format(float(E3)), "{:0.3f}".format(float(csh)), "{:0.3f}".format(float(f)), "{:0.3f}".format(float(E_ic))]
 
 ##############################################################
+
+
 def write_interstitials(structure, ttol=0.5):
     """ function to write POSCAR with interstitials
 
@@ -1134,13 +1278,17 @@ def write_interstitials(structure, ttol=0.5):
     test_str = deepcopy(struct)
 
     for nn in range(len(ints)):
-        test_str.add_atom(np.array(ints[nn])[0], np.array(ints[nn])[1], np.array(ints[nn])[2], 'B')
+        test_str.add_atom(np.array(ints[nn])[0], np.array(
+            ints[nn])[1], np.array(ints[nn])[2], 'B')
 
     print('Writing file POSCAR_ints with "B" type atoms as interstitials')
 
-    with open("POSCAR_ints", "w") as file: write.poscar(test_str, file, vasp5=True)
+    with open("POSCAR_ints", "w") as file:
+        write.poscar(test_str, file, vasp5=True)
 
 ##############################################################
+
+
 def create_supercell(struct, N1, N2, N3):
     """ Create a supercell with lattice vector N1 x N2 x N3 of input cell
 
@@ -1157,12 +1305,15 @@ def create_supercell(struct, N1, N2, N3):
     N3 = float(N3)
     input_str = deepcopy(struct)
     transp_cell = np.transpose(input_str.cell)
-    new_cell = np.transpose(np.array([N1*transp_cell[0], N2*transp_cell[1], N3*transp_cell[2]]))
+    new_cell = np.transpose(
+        np.array([N1*transp_cell[0], N2*transp_cell[1], N3*transp_cell[2]]))
     sc = supercell(input_str, new_cell)
 
     return sc
+
+
 ##############################################################
-if  __name__=='__main__':
+if __name__ == '__main__':
     """ Small code to test the output of above defined functions
     """
 
@@ -1175,5 +1326,3 @@ if  __name__=='__main__':
 #get_potential_alignment(defect, host)
 #get_band_filling(defect, host, potal=0.01)
 #get_imagecharge(defect, charge=1., epsilon=13.30)
-
-
