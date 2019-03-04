@@ -10,6 +10,7 @@ from pylada.crystal import Structure, primitive
 from pylada.crystal import read, write, neighbors, supercell
 from pylada.crystal.defects import reindex_sites
 from pylada.vasp import Extract, MassExtract
+from pylada.periodic_table import find
 
 # imports from python
 import spglib
